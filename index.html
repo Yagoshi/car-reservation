@@ -21,7 +21,11 @@
     @keyframes spin{to{transform:rotate(360deg)}}
     input[type="time"]::-webkit-calendar-picker-indicator,
     input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(0.7);padding:4px;}
-    input[type="time"],input[type="date"],input[type="text"]{font-size:16px !important;}
+    input[type="time"],input[type="date"],input[type="text"]{font-size:16px !important;max-width:100%;box-sizing:border-box;}
+    input[type="time"]{-webkit-appearance:none;appearance:none;}
+    .form-row{display:flex;gap:6px;width:100%;}
+    .form-col{flex:1;min-width:0;}
+    .form-col input{width:100%;padding:10px 6px;font-size:14px !important;background:var(--bg2);color:var(--t1);border:1px solid var(--bd);border-radius:8px;outline:none;font-family:inherit;box-sizing:border-box;}
   </style>
 </head>
 <body>
@@ -199,14 +203,14 @@ function render(){
 
     let modeFields="";
     if(form.mode==="time"){
-      modeFields=`<div style="display:flex;gap:8px;margin-bottom:12px;width:100%;overflow:hidden">
-        <div style="flex:1;min-width:0;overflow:hidden"><label style="display:block;font-size:11px;font-weight:500;color:var(--t2);margin-bottom:5px">開始</label><input type="time" value="${form.startTime}" onchange="setField('startTime',this.value)" style="width:100%;max-width:100%;padding:10px 8px;font-size:16px;background:var(--bg2);color:var(--t1);border:1px solid var(--bd);border-radius:8px;outline:none;font-family:inherit"/></div>
-        <div style="flex:1;min-width:0;overflow:hidden"><label style="display:block;font-size:11px;font-weight:500;color:var(--t2);margin-bottom:5px">終了</label><input type="time" value="${form.endTime}" onchange="setField('endTime',this.value)" style="width:100%;max-width:100%;padding:10px 8px;font-size:16px;background:var(--bg2);color:var(--t1);border:1px solid var(--bd);border-radius:8px;outline:none;font-family:inherit"/></div>
+      modeFields=`<div class="form-row" style="margin-bottom:12px">
+        <div class="form-col"><label style="display:block;font-size:11px;font-weight:500;color:var(--t2);margin-bottom:5px">開始</label><input type="time" value="${form.startTime}" onchange="setField('startTime',this.value)"/></div>
+        <div class="form-col"><label style="display:block;font-size:11px;font-weight:500;color:var(--t2);margin-bottom:5px">終了</label><input type="time" value="${form.endTime}" onchange="setField('endTime',this.value)"/></div>
       </div>`;
     } else if(form.mode==="multi"){
-      modeFields=`<div style="display:flex;gap:8px;margin-bottom:8px;width:100%;overflow:hidden">
-        <div style="flex:1;min-width:0;overflow:hidden"><label style="display:block;font-size:11px;font-weight:500;color:var(--t2);margin-bottom:5px">開始日</label><input type="date" value="${form.startDate}" onchange="setField('startDate',this.value)" style="width:100%;max-width:100%;padding:10px 8px;font-size:16px;background:var(--bg2);color:var(--t1);border:1px solid var(--bd);border-radius:8px;outline:none;font-family:inherit"/></div>
-        <div style="flex:1;min-width:0;overflow:hidden"><label style="display:block;font-size:11px;font-weight:500;color:var(--t2);margin-bottom:5px">終了日</label><input type="date" value="${form.endDate}" onchange="setField('endDate',this.value)" style="width:100%;max-width:100%;padding:10px 8px;font-size:16px;background:var(--bg2);color:var(--t1);border:1px solid var(--bd);border-radius:8px;outline:none;font-family:inherit"/></div>
+      modeFields=`<div class="form-row" style="margin-bottom:8px">
+        <div class="form-col"><label style="display:block;font-size:11px;font-weight:500;color:var(--t2);margin-bottom:5px">開始日</label><input type="date" value="${form.startDate}" onchange="setField('startDate',this.value)"/></div>
+        <div class="form-col"><label style="display:block;font-size:11px;font-weight:500;color:var(--t2);margin-bottom:5px">終了日</label><input type="date" value="${form.endDate}" onchange="setField('endDate',this.value)"/></div>
       </div>`;
       if(form.startDate&&form.endDate&&form.startDate<=form.endDate){
         modeFields+=`<div style="font-size:12px;color:var(--ac);margin-bottom:12px;padding:6px 10px;background:var(--acd);border-radius:6px">📅 ${calcDays(form.startDate,form.endDate)}日間</div>`;
