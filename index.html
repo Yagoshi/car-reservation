@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <title>ファミリーカー予約管理</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚗</text></svg>"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+    :root{--bg0:#0d1117;--bg1:#161b22;--bg2:#21262d;--bg3:#1c2129;--bd:#30363d;--t1:#e6edf3;--t2:#8b949e;--t3:#484f58;--ac:#58a6ff;--acd:#1f6feb33;--err:#f85149;--ok:#3fb950;}
+    html{font-size:16px;}
+    body{background:var(--bg0);color:var(--t1);font-family:'Noto Sans JP',sans-serif;overscroll-behavior:none;}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes slideUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+    @keyframes toastIn{from{opacity:0;transform:translateY(-16px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    input[type="time"]::-webkit-calendar-picker-indicator,
+    input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(0.7);padding:4px;}
+    input[type="time"],input[type="date"],input[type="text"]{font-size:16px !important;}
+  </style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+// ═══════════════════════════════════════
+// ファミリーカー予約管理 - Vanilla JS
+// ═══════════════════════════════════════
+
+const GAS_URL = "https://script.google.com/macros/s/AKfycbyzJJlRU16PT8uet5QUB6pa57yfySHwiyDhosbIxtAJ5JwxD5I9RY7RBA18TGThWKpecA/exec";
+const FAMILY = ["父ちゃん","佳那","颯太"];
+const COLORS = {
+  "父ちゃん":{bg:"#1a5276",light:"#5dade2"},
+  "佳那":{bg:"#7d3c98",light:"#c39bd3"},
+  "颯太":{bg:"#1e8449",light:"#7dcea0"},
+};
+const CAR = "ファミリーカー";
+const DAY = ["日","月","火","水","木","金","土"];
+const MON = ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"];
+
+// ─── State ───
+let state = {
+  year: new Date().getFullYear(),
+  month: new Date().getMonth(),
+  reservations: [],
+  selDate: null,
+  showForm: false,
+  editId: null,
+  loading: true,
+  saving: false,
+  form: { member:FAMILY[0], mode:"time", startDate:"", endDate:"", startTime:"09:00", endTime:"17:00", purpose:"" },
+};
+let toastTimer = null;
+
+// ─── Utils ───
+const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+const parseD = s => { const [y,m,d]=s.split("-").map(Number); return new Date(y,m-1,d); };
+const todayStr = fmt(new Date());
+const daysIn = (y,m) => new Date(y,m+1,0).getDate();
+const firstD = (y,m) => new Date(y,m,1).getDay();
+const fmtLabel = s => { const d=parseD(s); return `${d.getMonth()+1}/${d.getDate()}（${DAY[d.getDay()]}）`; };
+const calcDays = (a,b) => Math.round((parseD(b)-parseD(a))/864e5)+1;
+const toMin = t => { const [h,m]=t.split(":").map(Number); return h*60+m; };
+const isMobile = () => window.innerWidth < 640;
+
+function dateRange(a,b){
+  const r=[]; let c=parseD(a); const e=parseD(b);
+  while(c<=e){ r.push(fmt(c)); c.setDate(c.getDate()+1); }
+  return r;
+}
+
+function hasOverlap(a,b){
+  const ad=a.allDay||a.multiDay?dateRange(a.startDate,a.endDate):[a.startDate];
+  const bd=b.allDay||b.multiDay?dateRange(b.startDate,b.endDate):[b.startDate];
+  if(!ad.some(d=>bd.includes(d))) return false;
+  if(a.allDay||a.multiDay||b.allDay||b.multiDay) return true;
+  return toMin(a.startTime)<toMin(b.endTime)&&toMin(a.endTime)>toMin(b.startTime);
+}
+
+function getFor(ds){
+  return state.reservations.filter(r=>{
+    if(r.allDay||r.multiDay) return ds>=r.startDate&&ds<=r.endDate;
+    return r.startDate===ds;
+  });
+}
+
+// ─── API ───
+async function fetchRes(){
+  try{
+    const r=await fetch(GAS_URL); const j=await r.json();
+    if(j.status==="ok") return j.data;
+    return [];
+  }catch{ return []; }
+}
+
+async function postGAS(body){
+  try{
+    const r=await fetch(GAS_URL,{method:"POST",body:JSON.stringify(body)});
+    return await r.json();
+  }catch{ return {status:"error",message:"通信エラー"}; }
+}
+
+// ─── Toast ───
+function showToast(msg,type="success"){
+  clearTimeout(toastTimer);
+  const el=document.getElementById("toast");
+  el.textContent=msg;
+  el.style.display="block";
+  el.style.borderColor=type==="error"?"var(--err)":"var(--ok)";
+  el.style.color=type==="error"?"var(--err)":"var(--ok)";
+  el.style.background=type==="error"?"#f8514918":"#3fb95018";
+  el.style.animation="none"; el.offsetHeight; el.style.animation="toastIn .3s ease";
+  toastTimer=setTimeout(()=>{el.style.display="none";},2400);
+}
+
+// ─── Render ───
+function render(){
+  const mob=isMobile();
+  const {year,month,reservations,selDate,showForm,editId,loading,saving,form}=state;
+
+  if(loading){
+    document.getElementById("app").innerHTML=`
+      <div style="display:flex;justify-content:center;align-items:center;height:100vh">
+        <div style="text-align:center"><div style="font-size:36px;margin-bottom:12px;animation:pulse 1.5s infinite">🚗</div><div style="font-size:13px;color:var(--t2)">スプレッドシートから読み込み中...</div></div>
+      </div>`;
+    return;
+  }
+
+  const dim=daysIn(year,month);
+  const fd=firstD(year,month);
+  const selRes=selDate?getFor(selDate).sort((a,b)=>{
+    if(a.allDay||a.multiDay)return -1;if(b.allDay||b.multiDay)return 1;
+    return(a.startTime||"").localeCompare(b.startTime||"");
+  }):[];
+
+  // Upcoming
+  const upcoming=reservations
+    .filter(r=>r.endDate>=todayStr||r.startDate>=todayStr)
+    .sort((a,b)=>a.startDate.localeCompare(b.startDate)||(a.startTime||"00:00").localeCompare(b.startTime||"00:00"))
+    .slice(0,6);
+
+  let calCells="";
+  for(let i=0;i<fd;i++) calCells+=`<div style="min-height:${mob?56:74}px;background:var(--bg0);border-right:1px solid var(--bd);border-bottom:1px solid var(--bd)"></div>`;
+  for(let d=1;d<=dim;d++){
+    const ds=fmt(new Date(year,month,d));
+    const dow=(fd+d-1)%7;
+    const isToday=ds===todayStr;
+    const isSel=ds===selDate;
+    const dr=getFor(ds);
+    const maxShow=mob?1:2;
+    let badges=dr.slice(0,maxShow).map(r=>`<div style="font-size:${mob?7:9}px;padding:${mob?"1px 2px":"1px 4px"};border-radius:2px;margin-bottom:1px;background:${COLORS[r.member]?.bg||"#333"};color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${mob?r.member.charAt(0):r.member} ${r.allDay||r.multiDay?"終日":r.startTime||""}</div>`).join("");
+    if(dr.length>maxShow) badges+=`<div style="font-size:${mob?7:8}px;color:var(--t3)">+${dr.length-maxShow}</div>`;
+
+    calCells+=`<div onclick="clickDate('${ds}')" style="min-height:${mob?56:74}px;padding:${mob?"4px 2px":"5px 3px"};cursor:pointer;background:${isSel?"var(--acd)":"transparent"};border-right:1px solid var(--bd);border-bottom:1px solid var(--bd);user-select:none">
+      <div style="font-size:${mob?11:12}px;font-weight:${isToday?700:400};color:${isToday?"#fff":dow===0?"#f47067":dow===6?"#58a6ff":"var(--t1)"};${isToday?"width:22px;height:22px;border-radius:50%;background:var(--ac);":""}display:flex;align-items:center;justify-content:center;margin-bottom:${mob?1:2}px">${d}</div>
+      ${badges}
+    </div>`;
+  }
+
+  // Day headers
+  const dayHeaders=DAY.map((d,i)=>`<div style="text-align:center;padding:${mob?"7px 0":"9px 0"};font-size:${mob?10:11}px;font-weight:600;color:${i===0?"#f47067":i===6?"#58a6ff":"var(--t2)"};background:var(--bg2)">${d}</div>`).join("");
+
+  // Reservation list
+  let resList="";
+  if(selDate){
+    if(selRes.length===0&&!showForm){
+      resList=`<p style="font-size:13px;color:var(--t3);text-align:center;padding:18px 0">予約はありません</p>`;
+    }
+    selRes.forEach(r=>{
+      const timeLabel=r.allDay?`<span style="font-size:12px;font-weight:500;color:var(--ac)">終日</span>`
+        :r.multiDay?`<span style="font-size:11px;font-weight:500;color:var(--ac)">${fmtLabel(r.startDate)}〜${fmtLabel(r.endDate)}（${calcDays(r.startDate,r.endDate)}日間）</span>`
+        :`<span style="font-size:13px;font-weight:500">${r.startTime} − ${r.endTime}</span>`;
+      resList+=`<div style="display:flex;align-items:flex-start;gap:${mob?8:12}px;padding:${mob?"10px 10px":"10px 14px"};margin-bottom:7px;background:var(--bg2);border-radius:10px;border-left:3px solid ${COLORS[r.member]?.bg||"#555"}">
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;flex-wrap:wrap">
+            <span style="font-size:10px;padding:2px 8px;border-radius:4px;background:${COLORS[r.member]?.bg};color:#fff;font-weight:600;flex-shrink:0">${r.member}</span>
+            ${timeLabel}
+          </div>
+          <div style="font-size:12px;color:var(--t2);word-break:break-word">${r.purpose}</div>
+        </div>
+        <div style="display:flex;gap:4px;flex-shrink:0">
+          <button onclick="editRes('${r.id}')" style="width:${mob?36:30}px;height:${mob?36:30}px;border-radius:6px;background:transparent;border:1px solid var(--bd);cursor:pointer;font-size:13px">✏️</button>
+          <button onclick="deleteRes('${r.id}')" style="width:${mob?36:30}px;height:${mob?36:30}px;border-radius:6px;background:transparent;border:1px solid var(--bd);cursor:pointer;font-size:13px">🗑️</button>
+        </div>
+      </div>`;
+    });
+  }
+
+  // Form
+  let formHTML="";
+  if(showForm){
+    const memberBtns=FAMILY.map(m=>`<button onclick="setMember('${m}')" style="flex:1;padding:${mob?"10px 4px":"9px"};font-size:${mob?12:13}px;font-weight:500;border-radius:8px;cursor:pointer;border:2px solid ${form.member===m?COLORS[m].bg:"var(--bd)"};background:${form.member===m?COLORS[m].bg+"22":"transparent"};color:${form.member===m?COLORS[m].light:"var(--t2)"}">${m}</button>`).join("");
+    const modeBtns=[["time","時間指定"],["allday","終日"],["multi","連日"]].map(([v,l])=>`<button onclick="setMode('${v}')" style="flex:1;padding:${mob?"10px 4px":"8px 4px"};font-size:${mob?11:12}px;font-weight:${form.mode===v?600:400};border-radius:6px;border:none;cursor:pointer;background:${form.mode===v?"var(--ac)":"transparent"};color:${form.mode===v?"#fff":"var(--t2)"}">${l}</button>`).join("");
+
+    let modeFields="";
+    if(form.mode==="time"){
+      modeFields=`<div style="display:flex;gap:8px;margin-bottom:12px">
+        <div style="flex:1"><label style="display:block;font-size:11px;font-weight:500;color:var(--t2);margin-bottom:5px">開始</label><input type="time" value="${form.startTime}" onchange="setField('startTime',this.value)" style="width:100%;padding:10px 12px;font-size:16px;background:var(--bg2);color:var(--t1);border:1px solid var(--bd);border-radius:8px;outline:none;font-family:inherit"/></div>
+        <div style="flex:1"><label style="display:block;font-size:11px;font-weight:500;color:var(--t2);margin-bottom:5px">終了</label><input type="time" value="${form.endTime}" onchange="setField('endTime',this.value)" style="width:100%;padding:10px 12px;font-size:16px;background:var(--bg2);color:var(--t1);border:1px solid var(--bd);border-radius:8px;outline:none;font-family:inherit"/></div>
+      </div>`;
+    } else if(form.mode==="multi"){
+      modeFields=`<div style="display:flex;gap:8px;margin-bottom:8px">
+        <div style="flex:1"><label style="display:block;font-size:11px;font-weight:500;color:var(--t2);margin-bottom:5px">開始日</label><input type="date" value="${form.startDate}" onchange="setField('startDate',this.value)" style="width:100%;padding:10px 12px;font-size:16px;background:var(--bg2);color:var(--t1);border:1px solid var(--bd);border-radius:8px;outline:none;font-family:inherit"/></div>
+        <div style="flex:1"><label style="display:block;font-size:11px;font-weight:500;color:var(--t2);margin-bottom:5px">終了日</label><input type="date" value="${form.endDate}" onchange="setField('endDate',this.value)" style="width:100%;padding:10px 12px;font-size:16px;background:var(--bg2);color:var(--t1);border:1px solid var(--bd);border-radius:8px;outline:none;font-family:inherit"/></div>
+      </div>`;
+      if(form.startDate&&form.endDate&&form.startDate<=form.endDate){
+        modeFields+=`<div style="font-size:12px;color:var(--ac);margin-bottom:12px;padding:6px 10px;background:var(--acd);border-radius:6px">📅 ${calcDays(form.startDate,form.endDate)}日間</div>`;
+      }
+    }
+
+    formHTML=`<div style="padding:${mob?14:16}px;margin-top:6px;background:var(--bg3);border:1px solid var(--bd);border-radius:12px;animation:slideUp .25s ease">
+      <h3 style="font-size:14px;font-weight:600;margin-bottom:14px">${editId?"予約を編集":"新しい予約"}</h3>
+      <div style="margin-bottom:12px"><label style="display:block;font-size:11px;font-weight:500;color:var(--t2);margin-bottom:5px">利用者</label><div style="display:flex;gap:${mob?4:6}px">${memberBtns}</div></div>
+      <div style="margin-bottom:12px"><label style="display:block;font-size:11px;font-weight:500;color:var(--t2);margin-bottom:5px">予約タイプ</label><div style="display:flex;gap:3px;background:var(--bg0);border-radius:8px;padding:3px">${modeBtns}</div></div>
+      ${modeFields}
+      <div style="margin-bottom:16px"><label style="display:block;font-size:11px;font-weight:500;color:var(--t2);margin-bottom:5px">用途</label><input type="text" placeholder="例：買い物、通院、旅行..." value="${form.purpose}" oninput="setField('purpose',this.value)" enterkeyhint="done" style="width:100%;padding:10px 12px;font-size:16px;background:var(--bg2);color:var(--t1);border:1px solid var(--bd);border-radius:8px;outline:none;font-family:inherit"/></div>
+      <div style="display:flex;gap:8px">
+        <button onclick="doSave()" ${saving?"disabled":""} style="flex:1;padding:${mob?12:10}px;font-size:13px;font-weight:600;background:${saving?"var(--t3)":"var(--ac)"};color:#fff;border:none;border-radius:8px;cursor:${saving?"wait":"pointer"}">${saving?"保存中...":editId?"更新する":"予約する"}</button>
+        <button onclick="cancelForm()" style="padding:${mob?12:10}px ${mob?14:16}px;font-size:13px;background:transparent;color:var(--t2);border:1px solid var(--bd);border-radius:8px;cursor:pointer">取消</button>
+      </div>
+    </div>`;
+  }
+
+  // Upcoming
+  let upHTML="";
+  if(!upcoming.length){
+    upHTML=`<p style="font-size:12px;color:var(--t3);padding:12px 0">今後の予約はありません</p>`;
+  } else {
+    upcoming.forEach(r=>{
+      const d=parseD(r.startDate);
+      const tl=r.allDay?`<span style="color:var(--ac);font-size:11px">終日</span>`
+        :r.multiDay?`<span style="color:var(--ac);font-size:11px">${fmtLabel(r.startDate)}〜${fmtLabel(r.endDate)}</span>`
+        :`<span>${r.startTime}−${r.endTime}</span>`;
+      upHTML+=`<div onclick="goToRes('${r.startDate}',${d.getFullYear()},${d.getMonth()})" style="display:flex;align-items:center;gap:${mob?8:12}px;padding:${mob?"10px 10px":"10px 14px"};margin-bottom:6px;background:var(--bg1);border:1px solid var(--bd);border-radius:10px;cursor:pointer">
+        <div style="width:${mob?36:42}px;text-align:center;font-size:11px;color:${r.startDate===todayStr?"var(--ac)":"var(--t2)"};flex-shrink:0">
+          <div style="font-weight:700;font-size:${mob?15:17}px">${d.getDate()}</div>
+          <div style="font-size:${mob?9:11}px">${DAY[d.getDay()]}</div>
+        </div>
+        <div style="width:1px;height:28px;background:${COLORS[r.member]?.bg||"var(--bd)"};flex-shrink:0"></div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:${mob?12:13}px;font-weight:500;display:flex;align-items:center;gap:5px;flex-wrap:wrap">
+            <span style="color:${COLORS[r.member]?.light}">${r.member}</span>
+            <span style="color:var(--t3)">·</span>${tl}
+          </div>
+          <div style="font-size:11px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.purpose}</div>
+        </div>
+      </div>`;
+    });
+  }
+
+  // Main HTML
+  document.getElementById("app").innerHTML=`
+    <div id="toast" style="display:none;position:fixed;top:${mob?12:20}px;left:50%;transform:translateX(-50%);padding:${mob?8:10}px ${mob?16:24}px;border-radius:10px;font-size:13px;font-weight:500;z-index:1000;backdrop-filter:blur(12px);max-width:90vw;text-align:center"></div>
+    ${saving?`<div style="position:fixed;inset:0;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;z-index:2000">
+      <div style="background:var(--bg1);border:1px solid var(--bd);border-radius:12px;padding:20px 30px;text-align:center">
+        <div style="width:24px;height:24px;border:3px solid var(--ac);border-top-color:transparent;border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 10px"></div>
+        <div style="font-size:13px;color:var(--t2)">保存中...</div>
+      </div>
+    </div>`:""}
+    <div style="max-width:900px;margin:0 auto;padding:${mob?16:20}px ${mob?10:16}px 40px">
+      <!-- Header -->
+      <div style="display:flex;align-items:center;gap:${mob?10:14}px;margin-bottom:${mob?14:20}px;animation:fadeIn .4s ease">
+        <div style="width:${mob?40:46}px;height:${mob?40:46}px;border-radius:12px;flex-shrink:0;background:linear-gradient(135deg,#58a6ff,#a371f7);display:flex;align-items:center;justify-content:center;font-size:${mob?18:22}px">🚗</div>
+        <div style="flex:1;min-width:0"><h1 style="font-size:${mob?17:20}px;font-weight:700;letter-spacing:-0.02em">${CAR}</h1><p style="font-size:${mob?10:11}px;color:var(--t2);margin-top:1px">父ちゃん・佳那・颯太の予約管理</p></div>
+        <button onclick="doRefresh()" title="更新" style="width:${mob?36:34}px;height:${mob?36:34}px;border-radius:8px;border:1px solid var(--bd);background:var(--bg2);color:var(--t1);cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;flex-shrink:0">🔄</button>
+      </div>
+      <!-- Legend -->
+      <div style="display:flex;gap:${mob?12:16}px;margin-bottom:${mob?10:14}px;animation:fadeIn .45s ease">
+        ${FAMILY.map(m=>`<div style="display:flex;align-items:center;gap:5px"><div style="width:10px;height:10px;border-radius:3px;background:${COLORS[m].bg};flex-shrink:0"></div><span style="font-size:${mob?11:12}px;color:var(--t2)">${m}</span></div>`).join("")}
+      </div>
+      <!-- Calendar -->
+      <div id="calendar" style="background:var(--bg1);border:1px solid var(--bd);border-radius:${mob?12:16}px;overflow:hidden;margin-bottom:${mob?14:18}px;animation:fadeIn .5s ease">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:${mob?"12px 12px":"14px 18px"};border-bottom:1px solid var(--bd)">
+          <button onclick="prevMonth()" style="width:${mob?38:34}px;height:${mob?38:34}px;border-radius:8px;border:1px solid var(--bd);background:var(--bg2);color:var(--t1);cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center">◀</button>
+          <div style="text-align:center;display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center">
+            <span style="font-size:${mob?15:17}px;font-weight:600">${year}年 ${MON[month]}</span>
+            <button onclick="goToday()" style="font-size:10px;padding:3px 10px;background:var(--acd);color:var(--ac);border:1px solid var(--ac);border-radius:6px;cursor:pointer;font-weight:500">今日</button>
+          </div>
+          <button onclick="nextMonth()" style="width:${mob?38:34}px;height:${mob?38:34}px;border-radius:8px;border:1px solid var(--bd);background:var(--bg2);color:var(--t1);cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center">▶</button>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(7,1fr)">${dayHeaders}</div>
+        <div style="display:grid;grid-template-columns:repeat(7,1fr)">${calCells}</div>
+        ${mob?`<div style="text-align:center;padding:6px 0;font-size:9px;color:var(--t3)">← スワイプで月移動 →</div>`:""}
+      </div>
+      <!-- Selected Date -->
+      ${selDate?`<div id="datePanel" style="background:var(--bg1);border:1px solid var(--bd);border-radius:${mob?12:16}px;overflow:hidden;margin-bottom:${mob?14:18}px;animation:slideUp .3s ease">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:${mob?"12px 14px":"13px 18px"};border-bottom:1px solid var(--bd);gap:8px;flex-wrap:wrap">
+          <div><span style="font-size:${mob?14:15}px;font-weight:600">${fmtLabel(selDate)}</span><span style="font-size:12px;color:var(--t2);margin-left:8px">${selRes.length}件</span></div>
+          <button onclick="openNew()" style="padding:${mob?"9px 14px":"7px 16px"};font-size:12px;font-weight:600;background:var(--ac);color:#fff;border:none;border-radius:8px;cursor:pointer;white-space:nowrap">＋ 予約追加</button>
+        </div>
+        <div style="padding:${mob?"10px 12px":"10px 18px"}">${resList}${formHTML}</div>
+      </div>`:""}
+      <!-- Upcoming -->
+      <div style="animation:fadeIn .6s ease">
+        <h2 style="font-size:${mob?13:14}px;font-weight:600;margin-bottom:10px;color:var(--t2)">📅 今後の予約</h2>
+        ${upHTML}
+      </div>
+      <!-- Footer -->
+      <div style="text-align:center;font-size:10px;color:var(--t3);padding:16px 0 8px;margin-top:20px;border-top:1px solid var(--bd)">
+        ${CAR} 予約管理 · Yagoshi Family · Google Sheets 連携
+      </div>
+    </div>`;
+
+  // Swipe setup
+  const cal=document.getElementById("calendar");
+  if(cal){
+    cal.ontouchstart=e=>{state._touchX=e.touches[0].clientX;};
+    cal.ontouchend=e=>{
+      if(state._touchX==null)return;
+      const diff=e.changedTouches[0].clientX-state._touchX;
+      if(Math.abs(diff)>60){diff>0?prevMonth():nextMonth();}
+      state._touchX=null;
+    };
+  }
+}
+
+// ─── Global handlers ───
+window.clickDate=ds=>{state.selDate=ds;state.showForm=false;state.editId=null;render();};
+window.prevMonth=()=>{if(state.month===0){state.month=11;state.year--;}else state.month--;render();};
+window.nextMonth=()=>{if(state.month===11){state.month=0;state.year++;}else state.month++;render();};
+window.goToday=()=>{state.year=new Date().getFullYear();state.month=new Date().getMonth();render();};
+window.openNew=()=>{state.editId=null;state.form={member:FAMILY[0],mode:"time",startDate:state.selDate,endDate:state.selDate,startTime:"09:00",endTime:"17:00",purpose:""};state.showForm=true;render();};
+window.cancelForm=()=>{state.showForm=false;state.editId=null;render();};
+window.setMember=m=>{state.form.member=m;render();};
+window.setMode=v=>{state.form.mode=v;state.form.startDate=state.selDate;state.form.endDate=state.selDate;render();};
+window.setField=(k,v)=>{state.form[k]=v;render();};
+window.goToRes=(ds,y,m)=>{state.selDate=ds;state.year=y;state.month=m;state.showForm=false;state.editId=null;render();};
+
+window.editRes=id=>{
+  const r=state.reservations.find(x=>String(x.id)===String(id));
+  if(!r)return;
+  state.editId=r.id;
+  state.form={member:r.member,mode:r.multiDay?"multi":r.allDay?"allday":"time",startDate:r.startDate,endDate:r.endDate,startTime:r.startTime||"09:00",endTime:r.endTime||"17:00",purpose:r.purpose};
+  state.showForm=true;
+  render();
+};
+
+window.deleteRes=async id=>{
+  state.saving=true;render();
+  const result=await postGAS({action:"delete",id:String(id)});
+  state.saving=false;
+  if(result.status==="ok"){
+    state.reservations=state.reservations.filter(r=>String(r.id)!==String(id));
+    render();showToast("削除しました");
+  }else{render();showToast(result.message||"削除に失敗しました","error");}
+};
+
+window.doSave=async()=>{
+  const{form,editId,selDate}=state;
+  if(!form.purpose.trim()){showToast("用途を入力してください","error");return;}
+  if(form.mode==="time"&&toMin(form.startTime)>=toMin(form.endTime)){showToast("終了時間を確認してください","error");return;}
+  if(form.mode==="multi"&&form.startDate>form.endDate){showToast("終了日を確認してください","error");return;}
+
+  const nr={
+    id:editId||Date.now().toString(),member:form.member,
+    startDate:form.startDate,endDate:form.mode==="multi"?form.endDate:form.startDate,
+    startTime:form.mode==="time"?form.startTime:null,endTime:form.mode==="time"?form.endTime:null,
+    allDay:form.mode==="allday",multiDay:form.mode==="multi",purpose:form.purpose,
+  };
+  const others=state.reservations.filter(r=>editId?String(r.id)!==String(editId):true);
+  if(others.some(r=>hasOverlap(r,nr))){showToast("その期間は予約済みです","error");return;}
+
+  state.saving=true;render();
+  const result=await postGAS({action:editId?"update":"add",reservation:nr});
+  state.saving=false;
+  if(result.status==="ok"){
+    if(editId)state.reservations=state.reservations.map(r=>String(r.id)===String(editId)?nr:r);
+    else state.reservations.push(nr);
+    state.showForm=false;state.editId=null;
+    render();showToast(editId?"更新しました":"予約しました");
+  }else{render();showToast(result.message||"エラーが発生しました","error");}
+};
+
+window.doRefresh=async()=>{
+  state.loading=true;render();
+  state.reservations=await fetchRes();
+  state.loading=false;render();
+  showToast("最新データに更新しました");
+};
+
+// ─── Init ───
+(async()=>{
+  state.reservations=await fetchRes();
+  state.loading=false;
+  render();
+})();
+
+window.addEventListener("resize",render);
+</script>
+</body>
+</html>
